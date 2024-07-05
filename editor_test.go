@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AlecAivazis/survey/v2/core"
-	"github.com/AlecAivazis/survey/v2/terminal"
 	"github.com/stretchr/testify/assert"
+	"github.com/szaydel/survey/v2/core"
+	"github.com/szaydel/survey/v2/terminal"
 )
 
 func init() {

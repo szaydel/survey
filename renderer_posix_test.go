@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/AlecAivazis/survey/v2/terminal"
 	pseudotty "github.com/creack/pty"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/szaydel/survey/v2/terminal"
 )
 
 func TestRenderer_countLines(t *testing.T) {
