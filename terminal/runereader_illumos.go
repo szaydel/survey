@@ -1,11 +1,5 @@
-//go:build !windows && !solaris && !illumos
-// +build !windows,!solaris,!illumos
-
-// The terminal mode manipulation code is derived heavily from:
-// https://github.com/golang/crypto/blob/master/ssh/terminal/util.go:
-// Copyright 2011 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+//go:build solaris && illumos
+// +build solaris,illumos
 
 package terminal
 
@@ -13,9 +7,64 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"syscall"
-	"unsafe"
+	"os"
 )
+
+/*
+#include <errno.h>
+#include <stdio.h>
+#include <stropts.h>
+#include <termios.h>
+#include <unistd.h>
+
+int wrapper_set_term_mode(int fd, struct termios *t) {
+  int res = ioctl(fd, TCSETS, t);
+  if (res != 0) return errno;
+
+  return 0;
+}
+
+int wrapper_tweak_term_mode(int fd, struct termios *t) {
+  t->c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG);
+  t->c_cc[VMIN] = 1;
+  t->c_cc[VTIME] = 0;
+
+  int res = ioctl(fd, TCSETS, t);
+  if (res != 0) return errno;
+
+  return 0;
+}
+
+int wrapper_get_term_mode(int fd, struct termios *t) {
+  int res = ioctl(fd, TCGETS, t);
+  if (res != 0) return errno;
+
+  return 0;
+}
+*/
+import "C"
+
+func getTerminalMode(fd uintptr, t *C.struct_termios) error {
+	res := C.wrapper_get_term_mode(C.int(fd), t)
+	if res != 0 {
+		return fmt.Errorf("TCGETS ioctl failed with error code: %d", res)
+	}
+	return nil
+}
+
+func alterTerminalMode(fd uintptr, t *C.struct_termios) error {
+	if res := C.wrapper_tweak_term_mode(C.int(fd), t); res != 0 {
+		return fmt.Errorf("TCSETS ioctl failed with error code: %d", res)
+	}
+	return nil
+}
+
+func setTerminalMode(fd uintptr, t *C.struct_termios) error {
+	if res := C.wrapper_set_term_mode(C.int(fd), t); res != 0 {
+		return fmt.Errorf("TCSETS ioctl failed with error code: %d", res)
+	}
+	return nil
+}
 
 const (
 	normalKeypad      = '['
@@ -23,7 +72,7 @@ const (
 )
 
 type runeReaderState struct {
-	term   syscall.Termios
+	term   C.struct_termios
 	reader *bufio.Reader
 	buf    *bytes.Buffer
 }
@@ -45,19 +94,23 @@ func (rr *RuneReader) Buffer() *bytes.Buffer {
 
 // For reading runes we just want to disable echo.
 func (rr *RuneReader) SetTermMode() error {
-	if _, _, err := syscall.Syscall6(syscall.SYS_IOCTL, uintptr(rr.stdio.In.Fd()), ioctlReadTermios, uintptr(unsafe.Pointer(&rr.state.term)), 0, 0, 0); err != 0 {
+	var tCurr C.struct_termios
+	var tNew C.struct_termios
+	var err error
+
+	err = getTerminalMode(os.Stdin.Fd(), &tCurr)
+	if err != nil {
 		return err
 	}
 
-	newState := rr.state.term
-	newState.Lflag &^= syscall.ECHO | syscall.ECHONL | syscall.ICANON | syscall.ISIG
-	// Because we are clearing canonical mode, we need to ensure VMIN & VTIME are
-	// set to the values we expect. This combination puts things in standard
-	// "blocking read" mode (see termios(3)).
-	newState.Cc[syscall.VMIN] = 1
-	newState.Cc[syscall.VTIME] = 0
+	// Persist current settings before we alter them.
+	rr.state.term = tCurr
 
-	if _, _, err := syscall.Syscall6(syscall.SYS_IOCTL, uintptr(rr.stdio.In.Fd()), ioctlWriteTermios, uintptr(unsafe.Pointer(&newState)), 0, 0, 0); err != 0 {
+	// Make a copy of current settings and pass the copy to tweaking function.
+	tNew = tCurr
+
+	err = alterTerminalMode(os.Stdin.Fd(), &tNew)
+	if err != nil {
 		return err
 	}
 
@@ -65,7 +118,7 @@ func (rr *RuneReader) SetTermMode() error {
 }
 
 func (rr *RuneReader) RestoreTermMode() error {
-	if _, _, err := syscall.Syscall6(syscall.SYS_IOCTL, uintptr(rr.stdio.In.Fd()), ioctlWriteTermios, uintptr(unsafe.Pointer(&rr.state.term)), 0, 0, 0); err != 0 {
+	if err := setTerminalMode(os.Stdin.Fd(), &rr.state.term); err != nil {
 		return err
 	}
 	return nil
